@@ -1,0 +1,449 @@
+using QRCoder;
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Threading;
+using System.Threading.Tasks;
+using Telegram.Bot;
+using Telegram.Bot.Exceptions;
+using Telegram.Bot.Extensions.Polling;
+using Telegram.Bot.Types;
+using Telegram.Bot.Types.Enums;
+using Telegram.Bot.Types.ReplyMarkups;
+
+
+
+
+
+namespace bot_keykeeper
+{
+
+    static class KeysPool
+    {
+        public static List<Key> Keys;
+    }
+
+    class Key
+    {
+        public int RowXL { get; set; }
+        public string Uid { get; set; }
+        public string Title { get; set; }
+        public bool InStorage { get; set; }
+        public DateTime? TakedAt { get; set; }
+        public long? ChatId { get; set; }
+        public int NextPage { get; set; }
+        public int Page { get; set; }
+        public DateTime GetTime { get; set; }
+        public DateTime ReturnTime { get; set; }
+    }
+
+    class HandlerMy
+    {
+        public Key key = new Key();
+
+
+
+        public Key HandlerMyBase(ref List<List<Key>> ListKeysAction, ref int IntListKeysAction, ref bool ListAction, ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
+        {
+            //try
+            //{
+
+            Keys(ListKeysAction, IntListKeysAction, ListAction, 0);
+            if (update.Type == UpdateType.Message && update.Message.Type == MessageType.Text)
+            {
+                TextHandl(botClient, update, cancellationToken, ListAction);
+                long chatId = update.Message.Chat.Id;
+                BaseHandler(botClient, chatId, ListAction);
+            }
+            else if (update.Type == UpdateType.CallbackQuery)
+            {
+                CallbackHandler(botClient, update, cancellationToken, ref ListAction, ListKeysAction);
+                IntListKeysAction = key.NextPage;
+                long chatId = update.CallbackQuery.From.Id;
+                Keys(ListKeysAction, IntListKeysAction, ListAction, chatId);
+
+
+                BaseHandler(botClient, chatId, ListAction);
+            }
+            //}
+            //catch { }
+            return key;
+        }
+
+        private static void Keys(List<List<Key>> ListKeysAction, int IntListKeysAction, bool ListAction, long chatId)
+        {
+            List<Key> templist = new List<Key>();
+            foreach (var temp in ListKeysAction[IntListKeysAction])
+            {
+
+                if (IntListKeysAction == 0) { templist.Add(temp); }
+                else if (temp.InStorage == ListAction)
+                {
+                    if (!ListAction && (temp.ChatId == chatId)) { templist.Add(temp); }
+                    else { templist.Add(temp); }
+                }
+            }
+            if (templist.Count == 0)
+            {
+                foreach (var temp in ListKeysAction[0])
+                {
+                    templist.Add(temp);
+                }
+            }
+            KeysPool.Keys = templist;
+        }
+
+        private void TextHandl(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken, bool ListAction)
+        {
+            long chatId = update.Message.Chat.Id;
+            Console.WriteLine($"Received a '{update.Message.Text}' message in chat {chatId}.");
+        }
+
+        private void CallbackHandler(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken, ref bool ListAction, List<List<Key>> ListKeysAction)
+        {
+            botClient.AnswerCallbackQueryAsync(
+                        callbackQueryId: update.CallbackQuery.Id,
+                        text: "OK"
+                        );
+
+            var callbackData = update.CallbackQuery.Data;
+            key = KeysPool.Keys.Find(x => x.Uid == callbackData);
+
+            long chatId = update.CallbackQuery.From.Id;
+            string text = "";
+            if (key.Uid == "key_Взять ключ") { ListAction = true; }
+            else if (key.Uid == "key_Вернуть ключ") { ListAction = false; }
+            else if (key.Uid == "key_Просмотреть взятые ключи")
+            {
+                text = WiweKeys(ListKeysAction);
+                botClient.SendTextMessageAsync(chatId: chatId,
+                    text: String.Format(text));
+            }
+            else
+            {
+                key.ChatId = chatId;
+                try
+                {
+
+                    if (key.Page != 0)
+                    {
+                        key.InStorage = !key.InStorage;
+                        if (ListAction) { text = "Вы взяли ключ "; key.GetTime = DateTime.Now; }
+                        else { text = "Вы вернули ключ "; key.ReturnTime = DateTime.Now; }
+                    }
+
+                    Console.WriteLine($"Received callback '{update.CallbackQuery.Data}' from {chatId}.");
+                    try
+                    {
+                        botClient.DeleteMessageAsync(chatId, update.CallbackQuery.Message.MessageId);
+                    }
+                    catch {; }
+
+                    botClient.SendTextMessageAsync(
+                        chatId: chatId,
+                        text: String.Format(text + key.Title)
+                        );
+
+                    Console.WriteLine(text + key.Title + " пользователь с ид:" + chatId);
+                }
+                catch {; }
+            }
+        }
+
+
+
+        private async void BaseHandler(ITelegramBotClient botClient, long chatId, bool ListAction)
+        {
+            var availableKeys = KeysPool.Keys;
+            List<List<InlineKeyboardButton>> result = new List<List<InlineKeyboardButton>>();
+            result.Add(new List<InlineKeyboardButton>());
+            int row = 0;
+            int col = 0;
+            availableKeys.ForEach(key =>
+            {
+                result[row].Add(new InlineKeyboardButton() { CallbackData = key.Uid, Text = key.Title });
+                col++;
+                if (col >= 4)
+                {
+                    result.Add(new List<InlineKeyboardButton>());
+                    row++;
+                    col = 0;
+                }
+            });
+
+            var inlineKeyboardMarkup = new InlineKeyboardMarkup(result);
+
+            await botClient.SendTextMessageAsync(
+                                chatId: chatId,
+                                text: "Доступные ключи",
+                                replyMarkup: inlineKeyboardMarkup
+                            );
+        }
+
+        static string WiweKeys(List<List<Key>> ListKeysAction)
+        {
+            int i = 0; string tempstr = "";
+            foreach (var temp in ListKeysAction[1])
+            {
+                if (!temp.InStorage)
+                {
+                    string x = "Ключ от кабинета " + temp.Title + ", взял " + temp.ChatId + ", в " + temp.GetTime + ".\n";
+                    tempstr += x; i++;
+                }
+            }
+            if (i == 0) { tempstr += "Все ключи на месте."; }
+            return tempstr;
+        }
+    }
+
+    interface IUpdateHandler
+    {
+        void Handle(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken);
+    }
+
+    abstract class AbstractBaseHandler
+    {
+        protected List<List<InlineKeyboardButton>> GetAvailableKeysKeyboard(int NextPage, bool InStorage, long chatId)
+        {
+            List<Key> availableKeys = new List<Key>();
+
+            if (InStorage) { availableKeys = KeysPool.Keys.FindAll(x => x.InStorage == InStorage && x.Page == NextPage); }
+            else { availableKeys = KeysPool.Keys.FindAll(x => x.InStorage == InStorage && x.Page == NextPage && x.ChatId == chatId); }
+
+            if (availableKeys.Count == 0) { availableKeys = KeysPool.Keys.FindAll(x => x.Page == 0); }
+
+            List<List<InlineKeyboardButton>> result = new List<List<InlineKeyboardButton>>();
+            result.Add(new List<InlineKeyboardButton>());
+            int row = 0;
+            int col = 0;
+            availableKeys.ForEach(key =>
+            {
+                result[row].Add(new InlineKeyboardButton() { CallbackData = key.Uid, Text = key.Title });
+                col++;
+                if (col >= 4)
+                {
+                    result.Add(new List<InlineKeyboardButton>());
+                    row++;
+                    col = 0;
+                }
+            });
+            return result;
+        }
+        protected async void SendAvailableKeys(ITelegramBotClient botClient, long chatId, int NextPage, bool InStorage)
+        {
+            var inlineKeyboardMarkup = new InlineKeyboardMarkup(
+                GetAvailableKeysKeyboard(NextPage, InStorage, chatId)
+                );
+
+            await botClient.SendTextMessageAsync(
+                                chatId: chatId,
+                                text: "Доступные ключи",
+                                replyMarkup: inlineKeyboardMarkup
+                            );
+        }
+
+        protected string WiweKeys()
+        {
+            int i = 0; string tempstr = "";
+            foreach (var temp in KeysPool.Keys.FindAll(x => x.InStorage == false && x.Page == 1))
+            {
+                if (!temp.InStorage)
+                {
+                    string x = "Ключ от кабинета " + temp.Title + ", взял " + temp.ChatId + ", в " + temp.GetTime + ".\n";
+                    tempstr += x; i++;
+                }
+            }
+            if (i == 0) { tempstr += "Все ключи на месте."; }
+            return tempstr;
+        }
+    }
+
+    class TextHandler : AbstractBaseHandler, IUpdateHandler
+    {
+
+        public async void Handle(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
+        {
+            if (update.Type != UpdateType.Message)
+            {
+                return;
+            }
+
+            if (update.Message.Type != MessageType.Text)
+            {
+                return;
+            }
+
+
+            long chatId = update.Message.Chat.Id;
+
+            Console.WriteLine($"Received a '{update.Message.Text}' message in chat {chatId}.");
+
+            SendAvailableKeys(botClient, chatId, 0, true);
+        }
+    }
+
+    class CallbackHandler : AbstractBaseHandler, IUpdateHandler
+    {
+        public async void Handle(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
+        {
+            if (update.Type != UpdateType.CallbackQuery)
+            {
+                return;
+            }
+
+            await botClient.AnswerCallbackQueryAsync(
+                      callbackQueryId: update.CallbackQuery.Id,
+                      text: "OK"
+                      );
+
+            var callbackData = update.CallbackQuery.Data;
+            var key = KeysPool.Keys.Find(x => x.Uid == callbackData);
+            long chatId = update.CallbackQuery.From.Id;
+            bool Storage = true;
+            string text = "";
+            if (key.Uid == "key_Взять ключ") { Storage = true; }
+            else if (key.Uid == "key_Вернуть ключ") { Storage = false; }
+            else if (key.Uid == "key_Просмотреть взятые ключи")
+            {
+
+                text = WiweKeys();
+                await botClient.SendTextMessageAsync(chatId: chatId,
+                    text: String.Format(text));
+            }
+            else
+            {
+                //key.ChatId = chatId;
+                try
+                {
+
+                    if (key.Page != 0)
+                    {
+                        if (key.InStorage) { text = "Вы взяли ключ "; key.GetTime = DateTime.Now; key.InStorage = !key.InStorage; key.ChatId = chatId; }
+                        else if (key.ChatId == chatId) { text = "Вы вернули ключ "; key.ReturnTime = DateTime.Now; key.InStorage = !key.InStorage; }
+                        else { text = "Ключ от кабинета уже забрали, каб."; }
+                    }
+
+                    Console.WriteLine($"Received callback '{update.CallbackQuery.Data}' from {chatId}.");
+                    try
+                    {
+                        await botClient.DeleteMessageAsync(chatId, update.CallbackQuery.Message.MessageId);
+                    }
+                    catch {; }
+
+                    await botClient.SendTextMessageAsync(
+                         chatId: chatId,
+                         text: String.Format(text + key.Title)
+                         );
+
+                    Console.WriteLine(text + key.Title + " пользователь с ид:" + chatId);
+                }
+                catch {; }
+            }
+            SendAvailableKeys(botClient, chatId, key.NextPage, Storage);
+            return;
+        }
+
+        class Program
+        {
+
+            public Bitmap GetQrCode(string keyUid)
+            {
+                var keyUrl = $"https://telegram.me/sdxfcgvhbnkmlpbot?start={keyUid}";
+                PayloadGenerator.Url urlPayload =
+                new PayloadGenerator.Url(keyUrl);
+                QRCodeGenerator qrGenerator = new QRCodeGenerator();
+                QRCodeData qrCodeData = qrGenerator.CreateQrCode(urlPayload);
+                QRCode qrCode = new QRCode(qrCodeData);
+                Bitmap qrCodeImage = qrCode.GetGraphic(20);
+                return qrCodeImage;
+            }
+
+            static void WiweKeys(List<List<Key>> ListKeysAction)
+            {
+                int i = 0;
+                foreach (var temp in ListKeysAction[1])
+                {
+                    if (!temp.InStorage)
+                    {
+                        Console.WriteLine("Ключ от кабинета {0}, взял {1}, в {2}", temp.Title, temp.ChatId, temp.GetTime); i++;
+                    }
+                }
+                if (i == 0) { Console.WriteLine("Все ключи на месте."); }
+            }
+
+
+
+            static List<Key> InitKeys()
+            {
+
+                List<Key> ListKeys = new List<Key>()
+                {
+
+                // Page = 0
+                 new Key() { RowXL=1, Title="Взять ключ", Uid="key_Взять ключ", InStorage = true, NextPage = 1, Page = 0},
+                 new Key() { RowXL=2, Title="Вернуть ключ", Uid="key_Вернуть ключ", InStorage = true, NextPage = 1, Page = 0},
+                 new Key() { RowXL=3, Title="Просмотреть взятые ключи", Uid="key_Просмотреть взятые ключи", InStorage = true, NextPage = 0, Page = 0},
+                // Page = 1
+                 new Key() { RowXL=4, Title="201", Uid="key_201", InStorage = true, NextPage = 0, Page = 1},
+                 new Key() { RowXL=5, Title="202", Uid="key_202", InStorage = true, NextPage = 0, Page = 1},
+                 new Key() { RowXL=6, Title="203", Uid="key_203", InStorage = true, NextPage = 0, Page = 1},
+                 new Key() { RowXL=7, Title="204", Uid="key_204", InStorage = true, NextPage = 0, Page = 1},
+                 new Key() { RowXL=8, Title="205", Uid="key_205", InStorage = true, NextPage = 0, Page = 1},
+                 new Key() { RowXL=9, Title="206", Uid="key_206", InStorage = true, NextPage = 0, Page = 1},
+                 new Key() { RowXL=10, Title="207", Uid="key_207", InStorage = true, NextPage = 0, Page = 1},
+                 new Key() { RowXL=11, Title="208", Uid="key_208", InStorage = true, NextPage = 0, Page = 1},
+            };
+                return ListKeys;
+            }
+
+
+
+            static void Main(string[] args)
+            {
+                var botClient = new Telegram.Bot.TelegramBotClient("Yor Token");
+
+                KeysPool.Keys = InitKeys();
+
+                using var cts = new CancellationTokenSource();
+
+                // StartReceiving does not block the caller thread. Receiving is done on the ThreadPool.
+                botClient.StartReceiving(
+                    new DefaultUpdateHandler(HandleUpdateAsync, HandleErrorAsync),
+                    cts.Token);
+
+                //Console.WriteLine($"Start listening for @{me.Username}");
+                Console.WriteLine($"Start listening");
+                Console.ReadLine();
+
+                // Send cancellation request to stop bot
+                cts.Cancel();
+
+                Task HandleErrorAsync(ITelegramBotClient botClient, Exception exception, CancellationToken cancellationToken)
+                {
+                    var ErrorMessage = exception switch
+                    {
+                        ApiRequestException apiRequestException => $"Telegram API Error:\n[{apiRequestException.ErrorCode}]\n{apiRequestException.Message}",
+                        _ => exception.ToString()
+                    };
+
+                    Console.WriteLine(ErrorMessage);
+                    return Task.CompletedTask;
+                }
+
+                async Task HandleUpdateAsync(ITelegramBotClient botClient, Update update, CancellationToken cancellationToken)
+                {
+                    var handlers = new List<IUpdateHandler>()
+                {
+                    new CallbackHandler(),
+                    new TextHandler(),
+                };
+
+                    foreach (IUpdateHandler handler in handlers)
+                    {
+                        await Task.Run(() => handler.Handle(botClient, update, cancellationToken));
+                    }
+                }
+            }
+        }
+    }
+}
